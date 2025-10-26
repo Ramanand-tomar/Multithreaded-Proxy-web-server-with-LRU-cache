@@ -107,7 +107,7 @@ Quick start
    node server.js
 
 5. Open the dashboard:
-   http://localhost:8080/dashboard/  (default; see config PORT)
+   http://localhost:8080/dashboard  (default; see config PORT)
    Worker status: http://localhost:8081/api/workers-status
 
 Usage examples
