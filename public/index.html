@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proxy Server Dashboard</title>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Proxy Server with LRU Cache Dashboard</h1>
+            <div class="server-status">
+                <span id="serverStatus" class="status-offline">Offline</span>
+            </div>
+        </header>
+
+        <div class="dashboard">
+            <!-- Cache Statistics -->
+            <div class="card cache-stats">
+                <h2>📊 LRU Cache Statistics</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <label>Cache Size:</label>
+                        <span id="cacheSize">0</span>/<span id="cacheLimit">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>Hit Ratio:</label>
+                        <span id="hitRatio">0%</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>Memory Usage:</label>
+                        <span id="memoryUsage">0 MB</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>Last Result:</label>
+                        <span id="lastResultBadge" class="badge badge-neutral">—</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>Last Worker:</label>
+                        <span id="lastWorkerInfo">N/A</span>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div id="cacheProgress" class="progress-fill"></div>
+                </div>
+            </div>
+
+            <!-- Cache Visualization -->
+            <div class="card cache-visualization">
+                <h2>🔄 LRU Cache Items</h2>
+                <div id="cacheItems" class="cache-items">
+                    <!-- Cache items will be dynamically added here -->
+                </div>
+            </div>
+
+            <!-- Proxy Test Form -->
+            <div class="card proxy-test">
+                <h2>🔍 Test Proxy</h2>
+                <form id="proxyForm" class="proxy-form">
+                    <div class="form-group">
+                        <label for="targetUrl">URL to Proxy:</label>
+                        <input type="text" id="targetUrl" 
+                               placeholder="https://example.com" 
+                               value="">
+                    </div>
+                    <button type="submit">Fetch via Proxy</button>
+                </form>
+                <div class="test-urls" id="testUrls">
+                    <div class="test-urls-header">Quick test URLs from <a href="https://jsonplaceholder.typicode.com" target="_blank" rel="noopener">JSONPlaceholder</a>:</div>
+                    <div class="test-urls-list">
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts">/posts</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts/1">/posts/1</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts/1/comments">/posts/1/comments</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/comments?postId=1">/comments?postId=1</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/users">/users</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/todos/1">/todos/1</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/albums">/albums</button>
+                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/photos?_limit=5">/photos?_limit=5</button>
+                    </div>
+                </div>
+                <div id="proxyResult" class="proxy-result"></div>
+            </div>
+
+            <!-- Workers Status -->
+            <div class="card workers-status">
+                <h2>👥 Worker Processes</h2>
+                <div id="workersList" class="workers-list">
+                    <!-- Workers will be dynamically added here -->
+                </div>
+                <div class="legend"><span class="badge badge-hit">HIT</span> cache hit | <span class="badge badge-miss">MISS</span> cache miss</div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="card recent-activity">
+                <h2>📈 Recent Activity</h2>
+                <div id="activityLog" class="activity-log">
+                    <div class="activity-item">Server started...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
