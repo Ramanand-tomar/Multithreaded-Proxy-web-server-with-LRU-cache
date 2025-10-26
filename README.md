@@ -32,6 +32,8 @@ Complete feature list
   - GET `/api/workers-status` (served from master on PORT+1)
   - Additional optional endpoints for single cache item (view/delete) are referenced in UI and can be added.
 
+![Flowchart of Multi-threaded Proxy Server](public/Gemini_Generated_Image_p0ae7pp0ae7pp0ae.png)
+
 How it works internally (architecture & data flow)
 --------------------------------------------------
 1. Master process
