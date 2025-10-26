@@ -21,6 +21,8 @@ Key features
   - GET /api/cache-status — returns cache stats and LRU items
   - POST /api/clear-cache — clears the cache
   - GET (master on PORT+1) /api/workers-status — returns worker states
+ 
+![Flowchart of Multi-threaded Proxy Server](public/Gemini_Generated_Image_p0ae7pp0ae7pp0ae.png)
 
 Why build this
 ---------------
