@@ -3,32 +3,89 @@
 Repo: https://github.com/Ramanand-tomar/Multithreaded-Proxy-web-server-with-LRU-cache
 
 Overview
----------
-This project is a lightweight, multi-process HTTP proxy server built with Node.js. It uses the Node.js cluster module to run a worker per CPU, and implements an in-memory LRU (Least Recently Used) cache to reduce repeated upstream requests. A built-in dashboard provides real-time visibility into cache contents, cache statistics (size, hit/miss ratio, memory estimate), and worker status (busy/available, request counts, last handler).
+--------
+This project is a lightweight, multi-process HTTP proxy server built with Node.js. It uses the Node.js `cluster` module to run a worker per CPU core, and implements an in-memory LRU (Least Recently Used) cache to reduce repeated upstream requests. A dashboard served by the same server provides real‑time visibility into cache contents, cache statistics (size, hit/miss ratio, memory estimate), and worker status (busy/available, request counts, last handler).
 
-Key features
-------------
-- Multi-process (cluster) proxy server — scales to CPU cores
-- LRU cache implemented with doubly linked list + hashmap for O(1) get/put/evict
-- Real-time dashboard served from the same server:
-  - Cache statistics (size, limit, hits/misses, memory usage)
-  - LRU items visualization (LRU order, size, age)
-  - Worker processes status (pid, requests, busy/available)
-  - Test proxy form and quick test URLs
-- Caching of successful (HTTP 200) responses only
-- Response headers exposing cache and worker metadata (X-Cache, X-Worker-PID, X-Worker-ID, etc.)
-- API endpoints:
-  - GET /api/cache-status — returns cache stats and LRU items
-  - POST /api/clear-cache — clears the cache
-  - GET (master on PORT+1) /api/workers-status — returns worker states
- 
-![Flowchart of Multi-threaded Proxy Server](public/Gemini_Generated_Image_p0ae7pp0ae7pp0ae.png)
+What this project does
+----------------------
+- Accepts HTTP(S) proxy requests, supports both full-URLs (e.g. `/http://example.com/path`) and domain shorthand (e.g. `/example.com/path`).
+- Forwards requests to target hosts, streams responses back to clients.
+- Caches successful (HTTP 200) responses in an in-memory LRU cache.
+- Exposes a dashboard (UI) for monitoring cache contents and worker status.
+- Exposes small REST APIs for cache stats, clearing cache, and worker status (master runs a status server on PORT+1).
 
-Why build this
----------------
-- Useful for local development, testing caching behaviour and concurrency.
-- Educational: demonstrates DSA (LRU) and system-level concepts (clustering, inter-process messaging).
-- Lightweight proxy for internal tools / demos where a CDN or full-featured reverse proxy is overkill.
+Complete feature list
+---------------------
+- Multi-process proxy (one worker per CPU) using Node.js `cluster`.
+- Shared LRU cache accessible via `cacheManager` module.
+- LRU implemented with a doubly linked list + HashMap (O(1) get/put/evict).
+- Cache statistics: size, configured limit, hit/miss counts, hit ratio, estimated memory usage and per-item sizes.
+- Dashboard UI:
+  - LRU items visualized (most recent first), sizes, age, and quick actions (view/delete).
+  - Cache progress bar, hit ratio, memory usage.
+  - Worker list with status (busy/available), request counts and PID; highlights last handler.
+  - Test-proxy form and quick test URLs (JSONPlaceholder).
+- Response metadata headers: `X-Cache`, `X-Worker-PID`, `X-Worker-ID`, `X-Cache-Size`, `X-Cache-Hits`, `X-Cache-Misses`.
+- APIs:
+  - GET `/api/cache-status`
+  - POST `/api/clear-cache`
+  - GET `/api/workers-status` (served from master on PORT+1)
+  - Additional optional endpoints for single cache item (view/delete) are referenced in UI and can be added.
+
+How it works internally (architecture & data flow)
+--------------------------------------------------
+1. Master process
+   - Starts and forks N worker processes (N = number of CPU cores by default).
+   - Maintains worker metadata (status, requests, pid) updated via worker messages (`process.send`).
+   - Runs a small status server on PORT+1 to return all workers' info to the dashboard.
+
+2. Worker processes
+   - Each worker runs an HTTP server that:
+     - Serves dashboard static assets (`index.html`, `dashboard.js`, `dashboard.css`).
+     - Handles `/api/*` dashboard routes by calling `cacheManager` (which wraps the shared LRU instance in this process).
+     - Processes proxy requests: parses incoming path, determines target URL, checks cache, and either serves cached response or streams request to upstream server.
+   - Sends status updates to master when it becomes busy/available and increments request counts.
+
+3. Proxy path handling
+   - If request path starts with `/http` or contains a domain-like token, worker builds the target URL.
+   - For cached responses:
+     - `cacheManager.get(key)` returns cached body string (if exists) and updates cache hit counters.
+     - Worker sends response headers and body to client immediately.
+   - For uncached responses:
+     - Worker forwards the request to the upstream (http/https).
+     - Streams data from upstream and buffers response body to cache (only if statusCode === 200).
+     - After response end, `cacheManager.put(key, body)` stores it and the dashboard updates.
+
+LRU cache — data structures & operations
+----------------------------------------
+- Map (hashmap) for O(1) key → node lookup.
+- Doubly linked list for LRU ordering:
+  - Head: most recently used; Tail: least recently used.
+  - On `get`: move node to head; on `put` of existing key: update value and move to head.
+  - On `put` of new key when limit reached: evict tail (least recently used).
+- Each node holds: key, value (string), prev, next, lastAccessed timestamp.
+- CacheManager tracks hits, misses, and maintains `getStats()` that traverses list (head→tail) to produce ordered keys, sizes, and estimated memory usage (key+value bytes + small structure overhead).
+
+DSA and complexity considerations
+--------------------------------
+- get/put/evict are O(1) time — crucial for keeping proxy fast under load.
+- Memory estimation uses `Buffer.byteLength` to approximate stored bytes.
+- Balanced space/time trade-offs: counts-based limit (items) by default, can be extended to byte-size limit.
+- Using messaging (master/worker) keeps state aggregation centralized and avoids race conditions across processes.
+
+API & Response examples
+-----------------------
+- GET /api/cache-status
+  - Returns:
+    {
+      size, limit, hitRatio, memoryUsage, totalBytes,
+      hits, misses, totalRequests,
+      keys: [{ key, size, lastAccessed }, ...]
+    }
+- POST /api/clear-cache
+  - Clears cache, returns { success: true }.
+- GET /api/workers-status (master, on PORT+1)
+  - Returns: { workers: [{ id, pid, status, requests }, ...] }
 
 Quick start
 -----------
@@ -49,79 +106,63 @@ Quick start
 
 5. Open the dashboard:
    http://localhost:8080/dashboard/  (default; see config PORT)
+   Worker status: http://localhost:8081/api/workers-status
 
-6. Worker status API (master status server):
-   http://localhost:8081/api/workers-status  (PORT + 1)
+Usage examples
+--------------
+- Proxy a full URL:
+  http://localhost:8080/http://jsonplaceholder.typicode.com/posts
+- Proxy by domain shorthand:
+  http://localhost:8080/jsonplaceholder.typicode.com/posts
+- From dashboard: paste URL in Test Proxy box and submit — check X-Cache header to see HIT / MISS.
 
-Proxy usage examples
---------------------
-- Full URL proxy:
-  - Browser: http://localhost:8080/http://jsonplaceholder.typicode.com/posts
-  - The proxy accepts paths like `/http://example.com/path` and forwards them.
-- Domain shorthand:
-  - http://localhost:8080/jsonplaceholder.typicode.com/posts  (interpreted as http://jsonplaceholder.typicode.com/posts)
-- From the dashboard:
-  - Use the Test Proxy form or quick test buttons (JSONPlaceholder URLs included).
+Testing & verification
+----------------------
+- First request to a URL: expect `X-Cache: MISS`, subsequent requests: `X-Cache: HIT`.
+- Dashboard shows LRU items in most-recent-first order.
+- Worker server on PORT+1 returns current workers info; dashboard polls it periodically.
 
-Headers exposed
+Troubleshooting
 ---------------
-When proxied, responses include extra headers to help debugging:
-- X-Cache: HIT | MISS | BYPASS
-- X-Worker-PID: the PID of the worker that handled the request
-- X-Worker-ID: cluster worker id (if available)
-- X-Cache-Size, X-Cache-Hits, X-Cache-Misses
+- Dashboard opens blank / redirects: ensure root path `/` is served by worker and not forwarded to proxy (server routing handles this).
+- Worker status API returns 404: confirm master status server is listening on `PORT + 1` and no other process occupies that port.
+- Cache not filling: ensure proxied upstream returns 200 and response bodies are not streamed-only without buffering (proxyHandler buffers chunks and caches final body).
 
-LRU cache and DSA (how knowledge was applied)
----------------------------------------------
-- The LRU cache uses:
-  - A hashmap (Map) for O(1) key lookup.
-  - A doubly linked list to maintain order of use and enable O(1) move-to-front and eviction.
-- get/put operations are constant time (O(1)), preventing the cache from becoming a bottleneck at high QPS.
-- Memory accounting:
-  - The cache manager estimates memory usage by summing byte lengths of keys and values and a small per-node overhead.
-- The design choices (data structures and complexity trade-offs) were driven by performance and predictability requirements.
-
-Project structure (important files)
------------------------------------
-- server.js — cluster master & worker bootstrap, static dashboard serving, dashboard APIs
-- proxyHandler.js — proxy logic, request parsing, caching integration
-- lruCache.js — LRU cache implementation (Node + value + lastAccessed)
-- cacheManager.js — shared cache instance + stats (hits/misses/memory)
-- public/index.html, public/dashboard.js, public/dashboard.css — dashboard UI
-- config.js — configuration (PORT, CACHE_LIMIT, etc.)
-
-APIs
-----
-- GET /api/cache-status
-  - Returns: { size, limit, hitRatio, memoryUsage, totalBytes, hits, misses, totalRequests, keys: [ { key, size, lastAccessed } ] }
-- POST /api/clear-cache
-  - Clears the in-memory cache; returns success JSON
-- GET (status server on PORT+1) /api/workers-status
-  - Returns worker metadata (id, pid, status, requests)
-
-Testing notes
--------------
-- Use the dashboard to exercise endpoints and watch cache behavior.
-- Repeated requests to the same URL should show MISS on first request and HIT on subsequent requests (dashboard and response headers reflect this).
-- The dashboard polls APIs periodically for near-real-time updates; worker stats are exposed by the master on PORT+1.
+Security & production notes
+---------------------------
+- This project is intended as an educational / development tool. For production:
+  - Add authentication and access control for the dashboard.
+  - Sanitize and validate proxied URLs to avoid SSRF.
+  - Add rate-limiting and input validation.
+  - Consider persisting cache (Redis) and using WebSockets for dashboard updates.
 
 Potential improvements
 ----------------------
-- Persist cache to disk or Redis to survive restarts.
-- Add TTL support per-entry.
-- Add WebSocket for push updates instead of polling.
-- Add auth for the dashboard and rate-limiting for the proxy.
-- Add Prometheus metrics and logging aggregation for production use.
+- Byte-size based eviction (limit by total bytes not item count).
+- TTL per entry & invalidation strategies.
+- Persist cache to disk or external store (Redis).
+- Replace dashboard polling with WebSocket push.
+- Add Prometheus metrics, structured logs, and tracing.
+- Add E2E tests and stress tests with tools like `wrk` or `k6`.
 
-Contributing
-------------
-PRs and issues welcome. If you make improvements, please include tests and update README accordingly.
+Project structure
+-----------------
+- server.js — master + worker bootstrapping and routing
+- proxyHandler.js — proxy request handling and cache integration
+- lruCache.js — LRU cache core implementation (Node class + list)
+- cacheManager.js — shared cache instance + stats and utilities
+- public/* — dashboard UI (index.html, dashboard.js, dashboard.css)
+- routes/* — route helpers (optional)
+- config.js — configuration (PORT, CACHE_LIMIT, TARGET_HOST)
 
-License
--------
-MIT
-
-Contact
--------
-Repo: https://github.com/Ramanand-tomar/Multithreaded-Proxy-web-server-with-LRU-cache
+License & contact
+-----------------
+License: MIT  
+Repo: https://github.com/Ramanand-tomar/Multithreaded-Proxy-web-server-with-LRU-cache  
 Author: Ramanand Tomar
+
+References & learning
+---------------------
+- LRU cache patterns (hashmap + doubly linked list)
+- Node.js cluster module and inter-process messaging
+- Proxy streaming and header handling in Node.js HTTP/HTTPS modules
