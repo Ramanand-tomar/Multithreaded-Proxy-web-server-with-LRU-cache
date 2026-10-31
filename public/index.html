@@ -1,101 +1,262 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Proxy Server Dashboard</title>
+    <title>Enterprise Multithreaded Proxy & LRU Cache Dashboard</title>
     <link rel="stylesheet" href="dashboard.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🚀 Proxy Server with LRU Cache Dashboard</h1>
-            <div class="server-status">
-                <span id="serverStatus" class="status-offline">Offline</span>
+    <div class="app-layout">
+        <!-- Top Navigation Bar -->
+        <header class="top-nav">
+            <div class="nav-brand">
+                <div class="brand-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>ProxyEngine <span class="badge-version">v2.0 PROD</span></h1>
+                    <p class="brand-subtitle">Cluster Supervisor • Authoritative IPC Cache • SSRF Shield</p>
+                </div>
+            </div>
+
+            <div class="nav-actions">
+                <div class="server-status">
+                    <span class="status-pulse"></span>
+                    <span id="serverStatus" class="status-online">Connecting...</span>
+                </div>
+                <button type="button" id="themeToggle" class="btn-icon" title="Toggle Theme">
+                    <span class="theme-icon">🌙</span>
+                </button>
+                <button type="button" id="btnRefreshCache" class="btn-secondary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                    Refresh
+                </button>
+                <button type="button" id="btnClearCache" class="btn-danger">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    Clear Cache
+                </button>
             </div>
         </header>
 
-        <div class="dashboard">
-            <!-- Cache Statistics -->
-            <div class="card cache-stats">
-                <h2>📊 LRU Cache Statistics</h2>
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <label>Cache Size:</label>
-                        <span id="cacheSize">0</span>/<span id="cacheLimit">0</span>
+        <!-- KPI Metrics Grid -->
+        <section class="kpi-grid">
+            <!-- Hit Ratio -->
+            <div class="kpi-card highlight-cyan">
+                <div class="kpi-header">
+                    <span class="kpi-title">Hit Ratio</span>
+                    <span class="kpi-icon">🎯</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span id="hitRatio" class="kpi-number">0.0%</span>
+                    <span id="hitRate" class="kpi-sub">0% rate</span>
+                </div>
+                <div class="metric-meter">
+                    <div id="hitRatioBar" class="metric-meter-fill" style="width: 0%;"></div>
+                </div>
+                <div class="kpi-footer">
+                    <span>Hits: <strong id="cacheHits">0</strong></span>
+                    <span>Misses: <strong id="cacheMisses">0</strong></span>
+                </div>
+            </div>
+
+            <!-- Cache Capacity -->
+            <div class="kpi-card highlight-purple">
+                <div class="kpi-header">
+                    <span class="kpi-title">Cache Capacity</span>
+                    <span class="kpi-icon">📦</span>
+                </div>
+                <div class="kpi-value-row">
+                    <div class="kpi-number">
+                        <span id="cacheSize">0</span><span class="kpi-limit">/<span id="cacheLimit">50</span></span>
                     </div>
-                    <div class="stat-item">
-                        <label>Hit Ratio:</label>
-                        <span id="hitRatio">0%</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>Memory Usage:</label>
-                        <span id="memoryUsage">0 MB</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>Last Result:</label>
-                        <span id="lastResultBadge" class="badge badge-neutral">—</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>Last Worker:</label>
-                        <span id="lastWorkerInfo">N/A</span>
-                    </div>
+                    <span id="cacheEvictions" class="kpi-badge badge-warning">0 evictions</span>
                 </div>
                 <div class="progress-bar">
-                    <div id="cacheProgress" class="progress-fill"></div>
+                    <div id="cacheProgress" class="progress-fill" style="width: 0%;"></div>
+                </div>
+                <div class="kpi-footer">
+                    <span>Memory: <strong id="memoryUsage">0.00 MB</strong></span>
+                    <span>Budget: <strong>100 MiB</strong></span>
                 </div>
             </div>
 
-            <!-- Cache Visualization -->
-            <div class="card cache-visualization">
-                <h2>🔄 LRU Cache Items</h2>
-                <div id="cacheItems" class="cache-items">
-                    <!-- Cache items will be dynamically added here -->
+            <!-- Cluster Telemetry -->
+            <div class="kpi-card highlight-emerald">
+                <div class="kpi-header">
+                    <span class="kpi-title">Active Workers</span>
+                    <span class="kpi-icon">⚡</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span id="activeWorkersCount" class="kpi-number">0</span>
+                    <span class="kpi-badge badge-success">IPC Synced</span>
+                </div>
+                <div class="kpi-meta-row">
+                    <span>Last Handler: <strong id="lastWorkerInfo">N/A</strong></span>
+                </div>
+                <div class="kpi-footer">
+                    <span>Total Req: <strong id="totalRequests">0</strong></span>
+                    <span>Last State: <span id="lastResultBadge" class="badge badge-neutral">—</span></span>
                 </div>
             </div>
 
-            <!-- Proxy Test Form -->
-            <div class="card proxy-test">
-                <h2>🔍 Test Proxy</h2>
-                <form id="proxyForm" class="proxy-form">
-                    <div class="form-group">
-                        <label for="targetUrl">URL to Proxy:</label>
-                        <input type="text" id="targetUrl" 
-                               placeholder="https://example.com" 
-                               value="">
+            <!-- SSRF & Security Shield -->
+            <div class="kpi-card highlight-amber">
+                <div class="kpi-header">
+                    <span class="kpi-title">Security Shield</span>
+                    <span class="kpi-icon">🛡️</span>
+                </div>
+                <div class="kpi-value-row">
+                    <span class="kpi-number text-emerald">Active</span>
+                    <span class="kpi-badge badge-shield">RFC 9111</span>
+                </div>
+                <div class="kpi-meta-row">
+                    <span>SSRF & DNS Rebind: <strong>Enforced</strong></span>
+                </div>
+                <div class="kpi-footer">
+                    <span>Private IP Egress: <strong>Blocked</strong></span>
+                    <span>Hop-by-Hop: <strong>Stripped</strong></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Workspace: Split Console & Explorer -->
+        <main class="main-workspace">
+            <!-- Left Panel: Interactive Proxy Playground -->
+            <div class="panel console-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <h2>Proxy Request Console</h2>
                     </div>
-                    <button type="submit">Fetch via Proxy</button>
-                </form>
-                <div class="test-urls" id="testUrls">
-                    <div class="test-urls-header">Quick test URLs from <a href="https://jsonplaceholder.typicode.com" target="_blank" rel="noopener">JSONPlaceholder</a>:</div>
-                    <div class="test-urls-list">
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts">/posts</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts/1">/posts/1</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts/1/comments">/posts/1/comments</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/comments?postId=1">/comments?postId=1</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/users">/users</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/todos/1">/todos/1</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/albums">/albums</button>
-                        <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/photos?_limit=5">/photos?_limit=5</button>
+                    <span class="panel-tag">Live Sandbox</span>
+                </div>
+
+                <div class="panel-body">
+                    <form id="proxyForm" class="proxy-form-modern">
+                        <div class="url-input-group">
+                            <select id="reqMethod" class="method-select">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                                <option value="HEAD">HEAD</option>
+                                <option value="DELETE">DELETE</option>
+                            </select>
+                            <input type="text" id="targetUrl" placeholder="https://jsonplaceholder.typicode.com/posts/1" autocomplete="off" spellcheck="false" required>
+                            <button type="submit" id="btnExecuteProxy" class="btn-primary">
+                                <span>Send Request</span>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </button>
+                        </div>
+                    </form>
+
+                    <!-- Quick Preset Badges -->
+                    <div class="preset-section" id="testUrls">
+                        <span class="preset-label">Quick Presets:</span>
+                        <div class="preset-chips">
+                            <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/posts/1">/posts/1</button>
+                            <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/comments?postId=1">/comments?postId=1</button>
+                            <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/photos/1">/photos/1 (Image)</button>
+                            <button type="button" class="test-url" data-url="https://jsonplaceholder.typicode.com/users">/users (JSON)</button>
+                            <button type="button" class="test-url" data-url="http://169.254.169.254/latest/meta-data">AWS Metadata (SSRF Test)</button>
+                            <button type="button" class="test-url" data-url="http://127.0.0.1:8081/api/workers-status">Loopback (SSRF Test)</button>
+                        </div>
+                    </div>
+
+                    <!-- Response Inspector -->
+                    <div class="response-inspector">
+                        <div class="inspector-header">
+                            <span class="inspector-title">Response Output</span>
+                            <div class="inspector-badges" id="responseMetaBadges">
+                                <span id="resStatusBadge" class="status-chip chip-neutral">—</span>
+                                <span id="resLatencyBadge" class="status-chip chip-latency">0 ms</span>
+                                <span id="resCacheBadge" class="status-chip chip-cache">—</span>
+                            </div>
+                        </div>
+                        <pre id="proxyResult" class="code-terminal">// Submit a request above to inspect headers, timing, and response body...</pre>
                     </div>
                 </div>
-                <div id="proxyResult" class="proxy-result"></div>
             </div>
 
-            <!-- Workers Status -->
-            <div class="card workers-status">
-                <h2>👥 Worker Processes</h2>
-                <div id="workersList" class="workers-list">
-                    <!-- Workers will be dynamically added here -->
+            <!-- Right Panel: LRU Cache Explorer -->
+            <div class="panel cache-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                        <h2>LRU Cache Explorer</h2>
+                    </div>
+                    <div class="cache-controls">
+                        <input type="text" id="cacheSearch" placeholder="Filter cached URLs..." class="search-input">
+                    </div>
                 </div>
-                <div class="legend"><span class="badge badge-hit">HIT</span> cache hit | <span class="badge badge-miss">MISS</span> cache miss</div>
+
+                <div class="panel-body">
+                    <div id="cacheItems" class="cache-items-container">
+                        <!-- Dynamically populated via safe DOM APIs -->
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Lower Section: Cluster Topology & Event Log -->
+        <section class="bottom-grid">
+            <!-- Cluster Process Topology -->
+            <div class="panel cluster-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                        <h2>Cluster Process Topology</h2>
+                    </div>
+                    <span class="cluster-badge" id="clusterSummary">Loading workers...</span>
+                </div>
+                <div class="panel-body">
+                    <div id="workersList" class="workers-grid">
+                        <!-- Dynamically populated via safe DOM APIs -->
+                    </div>
+                </div>
             </div>
 
-            <!-- Recent Activity -->
-            <div class="card recent-activity">
-                <h2>📈 Recent Activity</h2>
-                <div id="activityLog" class="activity-log">
-                    <div class="activity-item">Server started...</div>
+            <!-- Real-time Activity Stream -->
+            <div class="panel activity-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                        <h2>Activity Stream</h2>
+                    </div>
+                    <button type="button" id="btnClearLogs" class="btn-text">Clear Logs</button>
+                </div>
+                <div class="panel-body">
+                    <div id="activityLog" class="activity-feed">
+                        <div class="feed-item info">[System] ProxyEngine initialized. Awaiting requests...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Toast Notifications Container -->
+        <div id="toastContainer" class="toast-container"></div>
+    </div>
+
+    <!-- Details Modal -->
+    <div id="detailsModal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modalTitle">Cache Entry Details</h3>
+                <button type="button" id="modalClose" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-meta-grid">
+                    <div><label>Key / URL:</label><span id="modalKey" class="mono-text"></span></div>
+                    <div><label>Payload Size:</label><span id="modalSize"></span></div>
+                    <div><label>Last Accessed:</label><span id="modalAccessed"></span></div>
+                </div>
+                <div class="modal-preview-box">
+                    <label>Payload Preview:</label>
+                    <pre id="modalPreview" class="code-terminal"></pre>
                 </div>
             </div>
         </div>

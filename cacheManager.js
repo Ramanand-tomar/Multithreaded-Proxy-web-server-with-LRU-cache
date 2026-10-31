@@ -1,84 +1,179 @@
+// Cache Manager: Unified Client supporting Local and IPC Cluster Shared-Cache modes
+const cluster = require("cluster");
 const LRUCache = require("./lruCache");
-const { CACHE_LIMIT } = require("./config");
+const SingleFlight = require("./singleFlight");
+const { CACHE_LIMIT, MAX_CACHE_BYTES, MAX_ITEM_BYTES } = require("./config");
 
 class CacheManager {
-    constructor() {
-        this.cache = new LRUCache(CACHE_LIMIT);
-        this.stats = {
-            hits: 0,
-            misses: 0,
-            totalRequests: 0
-        };
-    }
+  constructor() {
+    this.localCache = new LRUCache({
+      maxEntries: CACHE_LIMIT,
+      maxBytes: MAX_CACHE_BYTES,
+      maxItemBytes: MAX_ITEM_BYTES
+    });
 
-    get(key) {
-        const value = this.cache.get(key);
-        if (value !== null) {
-            this.stats.hits++;
-        } else {
-            this.stats.misses++;
+    this.singleFlight = new SingleFlight();
+    this.pendingIpc = new Map();
+    this.reqId = 0;
+    this.isWorker = cluster.isWorker && typeof process.send === "function";
+
+    if (this.isWorker) {
+      process.on("message", (msg) => {
+        if (!msg || typeof msg !== "object") return;
+        if (msg.id && this.pendingIpc.has(msg.id)) {
+          const { resolve } = this.pendingIpc.get(msg.id);
+          this.pendingIpc.delete(msg.id);
+          resolve(msg);
         }
-        this.stats.totalRequests++;
-        return value;
+      });
     }
+  }
 
-    put(key, value) {
-        const result = this.cache.put(key, value);
-        return result;
-    }
-
-    getStats() {
-        const keys = [];
-        let totalBytes = 0;
-        
-        // Traverse the linked list to get all items in LRU order
-        let node = this.cache.head.next;
-        while (node && node !== this.cache.tail) {
-            const keySize = Buffer.byteLength(node.key || '', 'utf8');
-            const valueSize = Buffer.byteLength(node.value || '', 'utf8');
-            const itemSize = keySize + valueSize;
-            totalBytes += itemSize;
-            
-            keys.push({
-                key: node.key,
-                size: valueSize, // The size of the response body
-                lastAccessed: node.lastAccessed || Date.now() // Use node's timestamp
-            });
-            
-            node = node.next;
+  _sendIpc(type, payload = {}) {
+    return new Promise((resolve) => {
+      const id = ++this.reqId;
+      const timeout = setTimeout(() => {
+        if (this.pendingIpc.has(id)) {
+          this.pendingIpc.delete(id);
+          resolve(null);
         }
+      }, 2000);
 
-        // Calculate memory usage and hit ratio
-        const memoryUsageMB = totalBytes / (1024 * 1024);
-        const hitRatio = this.stats.totalRequests > 0 ? 
-            (this.stats.hits / this.stats.totalRequests * 100) : 0;
+      this.pendingIpc.set(id, {
+        resolve: (val) => {
+          clearTimeout(timeout);
+          resolve(val);
+        }
+      });
 
+      try {
+        process.send({ type, id, ...payload });
+      } catch (err) {
+        clearTimeout(timeout);
+        this.pendingIpc.delete(id);
+        resolve(null);
+      }
+    });
+  }
+
+  async get(key) {
+    if (this.isWorker) {
+      const resp = await this._sendIpc("CACHE_GET", { key });
+      if (resp && resp.payload) {
         return {
-            size: this.cache.size, // Use actual cache size
-            limit: this.cache.limit,
-            hitRatio: hitRatio.toFixed(1),
-            memoryUsage: memoryUsageMB.toFixed(2),
-            totalBytes: totalBytes,
-            hits: this.stats.hits,
-            misses: this.stats.misses,
-            totalRequests: this.stats.totalRequests,
-            keys: keys // Already in LRU order from head to tail
+          headers: resp.payload.headers,
+          statusCode: resp.payload.statusCode,
+          size: resp.payload.size,
+          data: resp.payload.dataBase64 ? Buffer.from(resp.payload.dataBase64, "base64") : Buffer.from("")
         };
+      }
+      return null;
+    }
+    return this.localCache.get(key);
+  }
+
+  async put(key, entry) {
+    if (this.isWorker) {
+      const dataBase64 = entry.data && Buffer.isBuffer(entry.data)
+        ? entry.data.toString("base64")
+        : "";
+
+      await this._sendIpc("CACHE_PUT", {
+        key,
+        entry: {
+          dataBase64,
+          headers: entry.headers,
+          statusCode: entry.statusCode,
+          size: entry.size
+        }
+      });
+      return;
+    }
+    this.localCache.put(key, entry);
+  }
+
+  async delete(key) {
+    if (this.isWorker) {
+      const resp = await this._sendIpc("CACHE_DELETE", { key });
+      return resp ? Boolean(resp.deleted) : false;
+    }
+    return this.localCache.delete(key);
+  }
+
+  async clear() {
+    if (this.isWorker) {
+      await this._sendIpc("CACHE_CLEAR");
+      return;
+    }
+    this.localCache.clear();
+  }
+
+  async getStats() {
+    if (this.isWorker) {
+      const resp = await this._sendIpc("CACHE_STATS");
+      if (resp && resp.stats) {
+        return resp.stats;
+      }
     }
 
-    getCache() {
-        return this.cache;
+    const keys = [];
+    let totalBytes = 0;
+    let node = this.localCache.head.next;
+
+    while (node && node !== this.localCache.tail) {
+      const itemBytes = node.size || 0;
+      totalBytes += itemBytes;
+      keys.push({
+        key: node.key,
+        size: itemBytes,
+        lastAccessed: node.lastAccessed
+      });
+      node = node.next;
     }
 
-    clear() {
-        this.cache.map.clear();
-        this.cache.size = 0;
-        this.cache.head.next = this.cache.tail;
-        this.cache.tail.prev = this.cache.head;
-        this.cache.hits = 0;
-        this.cache.misses = 0;
-        this.stats = { hits: 0, misses: 0, totalRequests: 0 };
+    const totalRequests = this.localCache.hits + this.localCache.misses;
+    const hitRatio = totalRequests > 0 ? (this.localCache.hits / totalRequests * 100).toFixed(1) : "0.0";
+    const memoryUsageMB = (totalBytes / (1024 * 1024)).toFixed(2);
+
+    return {
+      size: this.localCache.size,
+      limit: this.localCache.limit,
+      hitRatio,
+      memoryUsage: memoryUsageMB,
+      totalBytes,
+      hits: this.localCache.hits,
+      misses: this.localCache.misses,
+      evictions: this.localCache.evictions,
+      totalRequests,
+      keys
+    };
+  }
+
+  async getWorkersStatus() {
+    if (this.isWorker) {
+      const resp = await this._sendIpc("GET_WORKERS_STATUS");
+      if (resp && resp.workers) {
+        return resp.workers;
+      }
     }
+    return [{ id: 1, pid: process.pid, status: "available", requests: 0 }];
+  }
+
+  getQuickStats() {
+    const totalRequests = this.localCache.hits + this.localCache.misses;
+    const hitRatio = totalRequests > 0 ? (this.localCache.hits / totalRequests * 100).toFixed(1) : "0.0";
+    return {
+      size: this.localCache.size,
+      limit: this.localCache.limit,
+      hits: this.localCache.hits,
+      misses: this.localCache.misses,
+      hitRatio
+    };
+  }
+
+  getCache() {
+    return this.localCache;
+  }
 }
 
 module.exports = new CacheManager();

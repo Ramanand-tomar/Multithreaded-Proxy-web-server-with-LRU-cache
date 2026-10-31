@@ -1,131 +1,139 @@
-const http = require("http");
-const https = require("https");
-const url = require("url");
 const cluster = require("cluster");
 const cacheManager = require("./cacheManager");
+const { isCacheableMethod } = require("./httpUtils");
+const { validateTargetDestination } = require("./security");
+const { forwardRequestStream, fetchUpstreamResponse } = require("./upstreamClient");
+const { ALLOW_PRIVATE_IP, MAX_ITEM_BYTES } = require("./config");
 
-// Use the shared cache instance
-const cache = cacheManager;
-
-function handleRequest(clientReq, clientRes) {
-  // Skip favicon for proxy requests (already handled in server.js for dashboard)
+async function handleRequest(clientReq, clientRes) {
   if (clientReq.url === "/favicon.ico") {
     clientRes.writeHead(204, { "Content-Type": "image/x-icon" });
     clientRes.end();
     return;
   }
 
-  console.log(`Original URL: ${clientReq.url}`);
-  
   let targetUrl;
-  const cleanUrl = clientReq.url.startsWith("/") ? clientReq.url.slice(1) : clientReq.url;
-  
-  // Check if it's a full URL
-  if (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://")) {
-    targetUrl = cleanUrl;
+  const rawPath = clientReq.url.startsWith("/") ? clientReq.url.slice(1) : clientReq.url;
+
+  if (rawPath.startsWith("http://") || rawPath.startsWith("https://")) {
+    targetUrl = rawPath;
   } else {
-    // Check if it looks like a domain (contains dot or known TLD)
-    const hasDomain = /\.|localhost|:\d+/.test(cleanUrl.split("/")[0]);
-    if (hasDomain && cleanUrl) {
-      targetUrl = `http://${cleanUrl}`;
+    const hasDomain = /\.|localhost|:\d+/.test(rawPath.split("/")[0]);
+    if (hasDomain && rawPath) {
+      targetUrl = `http://${rawPath}`;
     } else {
-      // No default target host: reject ambiguous paths
-      clientRes.writeHead(400, { "Content-Type": "text/plain" });
-      clientRes.end("Bad Request: provide a full URL (http/https) or a domain, e.g., /http://example.com or /example.com");
+      clientRes.writeHead(400, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({
+        error: "Bad Request",
+        message: "Provide a valid target URL (e.g., /http://example.com or /example.com)"
+      }));
       return;
     }
   }
 
-  const parsed = url.parse(targetUrl);
-  const cacheKey = targetUrl;
-
-  console.log(`Proxying to: ${targetUrl}`);
-  console.log(`Cache size: ${cache.getCache().size}`);
-
-  // Check cache - use shared cache instance
-  const cachedResponse = cache.get(cacheKey);
-  if (cachedResponse) {
-    console.log(`Serving from cache: ${cacheKey}`);
-    // Expose cache and worker info headers
-    try {
-      clientRes.setHeader('X-Cache', 'HIT');
-      clientRes.setHeader('X-Worker-PID', String(process.pid));
-      if (cluster && cluster.worker && typeof cluster.worker.id !== 'undefined') {
-        clientRes.setHeader('X-Worker-ID', String(cluster.worker.id));
-      }
-      const stats = cache.getStats();
-      clientRes.setHeader('X-Cache-Size', String(stats.size));
-      clientRes.setHeader('X-Cache-Hits', String(stats.hits));
-      clientRes.setHeader('X-Cache-Misses', String(stats.misses));
-    } catch (e) {}
-    clientRes.writeHead(200, { "Content-Type": "text/html" });
-    clientRes.end(cachedResponse);
+  // 1. SSRF and Destination Validation
+  let validated;
+  try {
+    validated = await validateTargetDestination(targetUrl, ALLOW_PRIVATE_IP);
+  } catch (err) {
+    clientRes.writeHead(403, { "Content-Type": "application/json" });
+    clientRes.end(JSON.stringify({
+      error: "Forbidden",
+      message: "SSRF Policy Violation: " + err.message
+    }));
     return;
   }
 
-  // Choose http or https module based on protocol
-  const proxyModule = parsed.protocol === "https:" ? https : http;
-  
-  const options = {
-    hostname: parsed.hostname,
-    port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-    path: parsed.path || "/",
-    method: clientReq.method,
-    headers: {
-      ...clientReq.headers,
-      host: parsed.hostname,
-    },
+  const { parsedUrl, targetIP } = validated;
+  const cacheKey = `${parsedUrl.origin}${parsedUrl.pathname}${parsedUrl.search}`;
+  const isCacheable = isCacheableMethod(clientReq.method);
+
+  // Common response metadata headers
+  const stats = cacheManager.getQuickStats();
+  const extraHeaders = {
+    "X-Worker-PID": String(process.pid),
+    "X-Cache-Size": String(stats.size),
+    "X-Cache-Hits": String(stats.hits),
+    "X-Cache-Misses": String(stats.misses)
   };
+  if (cluster && cluster.worker && typeof cluster.worker.id !== "undefined") {
+    extraHeaders["X-Worker-ID"] = String(cluster.worker.id);
+  }
 
-  // Remove headers that shouldn't be forwarded
-  delete options.headers["accept-encoding"];
+  // 2. Cache HIT Evaluation (Safe methods only)
+  if (isCacheable) {
+    const cachedEntry = await cacheManager.get(cacheKey);
+    if (cachedEntry) {
+      extraHeaders["X-Cache"] = "HIT";
 
-  const proxy = proxyModule.request(options, (res) => {
-    let body = Buffer.from("");
+      if (cachedEntry && typeof cachedEntry === "object" && cachedEntry.data) {
+        const preservedHeaders = { ...(cachedEntry.headers || {}) };
+        delete preservedHeaders["connection"];
+        delete preservedHeaders["keep-alive"];
+        delete preservedHeaders["transfer-encoding"];
 
-    // Collect response headers for caching
-    const responseHeaders = { ...res.headers };
-    
-    res.on("data", (chunk) => {
-      body = Buffer.concat([body, chunk]);
-    });
-
-    res.on("end", () => {
-      const responseBody = body.toString();
-      
-      // Only cache successful responses
-      if (res.statusCode === 200) {
-        cache.put(cacheKey, responseBody);
-        console.log(`Cached response for: ${cacheKey}`);
+        Object.assign(preservedHeaders, extraHeaders);
+        clientRes.writeHead(cachedEntry.statusCode || 200, preservedHeaders);
+        clientRes.end(cachedEntry.data);
+      } else {
+        extraHeaders["Content-Type"] = "text/html";
+        clientRes.writeHead(200, extraHeaders);
+        clientRes.end(cachedEntry);
       }
+      return;
+    }
+  }
 
-      // Send headers and response to client
-      try {
-        const stats = cache.getStats();
-        responseHeaders['X-Cache'] = res.statusCode === 200 ? 'MISS' : 'BYPASS';
-        responseHeaders['X-Worker-PID'] = String(process.pid);
-        if (cluster && cluster.worker && typeof cluster.worker.id !== 'undefined') {
-          responseHeaders['X-Worker-ID'] = String(cluster.worker.id);
+  // 3. Cache MISS with Single-Flight Stampede Coalescing
+  try {
+    if (isCacheable) {
+      const upstreamResult = await cacheManager.singleFlight.do(cacheKey, async () => {
+        // Double check cache in case a previous coalesced request populated it
+        const entry = await cacheManager.get(cacheKey);
+        if (entry) return entry;
+
+        const fetched = await fetchUpstreamResponse(clientReq, parsedUrl, targetIP);
+        if (fetched.statusCode === 200 && fetched.buffer.length <= MAX_ITEM_BYTES) {
+          await cacheManager.put(cacheKey, {
+            data: fetched.buffer,
+            headers: fetched.headers,
+            statusCode: fetched.statusCode,
+            size: fetched.buffer.length
+          });
         }
-        responseHeaders['X-Cache-Size'] = String(stats.size);
-        responseHeaders['X-Cache-Hits'] = String(stats.hits);
-        responseHeaders['X-Cache-Misses'] = String(stats.misses);
-      } catch (e) {}
-      clientRes.writeHead(res.statusCode, responseHeaders);
-      clientRes.end(body);
-      
-      console.log(`Proxied response completed for: ${cacheKey}`);
-    });
-  });
+        return {
+          data: fetched.buffer,
+          headers: fetched.headers,
+          statusCode: fetched.statusCode
+        };
+      });
 
-  proxy.on("error", (err) => {
-    console.error("Proxy error:", err.message);
-    clientRes.writeHead(500);
-    clientRes.end("Internal Proxy Error");
-  });
+      const responseHeaders = { ...(upstreamResult.headers || {}) };
+      delete responseHeaders["connection"];
+      delete responseHeaders["keep-alive"];
+      delete responseHeaders["transfer-encoding"];
 
-  // Forward client request body
-  clientReq.pipe(proxy);
+      extraHeaders["X-Cache"] = "MISS";
+      Object.assign(responseHeaders, extraHeaders);
+
+      clientRes.writeHead(upstreamResult.statusCode || 200, responseHeaders);
+      clientRes.end(upstreamResult.data);
+    } else {
+      // Non-idempotent methods (POST, PUT, DELETE) stream directly to upstream
+      extraHeaders["X-Cache"] = "BYPASS";
+      await forwardRequestStream(clientReq, clientRes, parsedUrl, targetIP, extraHeaders);
+    }
+  } catch (err) {
+    if (!clientRes.headersSent) {
+      const isTimeout = err.message && err.message.includes("timed out");
+      const statusCode = isTimeout ? 504 : 502;
+      clientRes.writeHead(statusCode, { "Content-Type": "application/json" });
+      clientRes.end(JSON.stringify({
+        error: isTimeout ? "Gateway Timeout" : "Bad Gateway",
+        message: err.message
+      }));
+    }
+  }
 }
 
 module.exports = handleRequest;
