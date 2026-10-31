@@ -132,6 +132,7 @@ All parameters support environment variable overrides:
 | `MAX_ITEM_BYTES` | `5242880` | Maximum individual cache item size (5 MiB) |
 | `UPSTREAM_TIMEOUT_MS` | `15000` | Upstream connection timeout (15 seconds) |
 | `WORKER_COUNT` | `0` | Number of workers/threads (0 = all CPU cores) |
+| `CONCURRENCY_MODE` | `cluster` | Concurrency engine: `cluster` (multi-process) or `threads` (worker_threads) |
 | `ALLOW_PRIVATE_IP` | `false` | When true, permits connections to loopback/private IPs (used in tests) |
 
 ---
