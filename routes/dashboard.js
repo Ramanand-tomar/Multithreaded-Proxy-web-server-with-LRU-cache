@@ -24,7 +24,7 @@ async function handleDashboardRoutes(req, res) {
 
   // Set default CORS for local dashboard usage
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (method === "OPTIONS") {
@@ -34,11 +34,15 @@ async function handleDashboardRoutes(req, res) {
   }
 
   // Dashboard HTML
-  if (cleanPath === "/" || cleanPath === "/index.html" || cleanPath === "/dashboard") {
+  if ((cleanPath === "/" || cleanPath === "/index.html" || cleanPath === "/dashboard") && (method === "GET" || method === "HEAD")) {
     const filePath = path.join(PUBLIC_DIR, "index.html");
     fs.readFile(filePath, (err, data) => {
       if (err) {
         res.writeHead(200, { "Content-Type": "text/html" });
+        if (method === "HEAD") {
+          res.end();
+          return;
+        }
         res.end(`
           <!DOCTYPE html>
           <html>
@@ -52,14 +56,18 @@ async function handleDashboardRoutes(req, res) {
         `);
         return;
       }
-      res.writeHead(200, { "Content-Type": "text/html" });
+      res.writeHead(200, { "Content-Type": "text/html", "Content-Length": data.length });
+      if (method === "HEAD") {
+        res.end();
+        return;
+      }
       res.end(data);
     });
     return true;
   }
 
   // Static Assets from /public (screenshots, icons, images, styles, scripts)
-  if (method === "GET") {
+  if (method === "GET" || method === "HEAD") {
     const safePath = path.normalize(cleanPath).replace(/^(\.\.[\/\\])+/, "");
     const candidatePath = path.resolve(PUBLIC_DIR, "." + safePath);
     if (candidatePath.startsWith(PUBLIC_DIR) && fs.existsSync(candidatePath)) {
@@ -68,7 +76,14 @@ async function handleDashboardRoutes(req, res) {
         if (stat.isFile()) {
           const ext = path.extname(candidatePath).toLowerCase();
           const contentType = MIME_TYPES[ext] || "application/octet-stream";
-          res.writeHead(200, { "Content-Type": contentType });
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Length": stat.size
+          });
+          if (method === "HEAD") {
+            res.end();
+            return true;
+          }
           fs.createReadStream(candidatePath).pipe(res);
           return true;
         }
@@ -79,18 +94,34 @@ async function handleDashboardRoutes(req, res) {
   }
 
   // API: Get Cache Status
-  if (cleanPath === "/api/cache-status" && method === "GET") {
-    res.writeHead(200, { "Content-Type": "application/json" });
+  if (cleanPath === "/api/cache-status" && (method === "GET" || method === "HEAD")) {
     const stats = await cacheManager.getStats();
-    res.end(JSON.stringify(stats));
+    const payload = JSON.stringify(stats);
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload)
+    });
+    if (method === "HEAD") {
+      res.end();
+      return true;
+    }
+    res.end(payload);
     return true;
   }
 
   // API: Get Workers Status (Single-Port Cloud Ready)
-  if (cleanPath === "/api/workers-status" && method === "GET") {
-    res.writeHead(200, { "Content-Type": "application/json" });
+  if (cleanPath === "/api/workers-status" && (method === "GET" || method === "HEAD")) {
     const workers = await cacheManager.getWorkersStatus();
-    res.end(JSON.stringify({ workers }));
+    const payload = JSON.stringify({ workers });
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload)
+    });
+    if (method === "HEAD") {
+      res.end();
+      return true;
+    }
+    res.end(payload);
     return true;
   }
 
@@ -113,7 +144,7 @@ async function handleDashboardRoutes(req, res) {
       return true;
     }
 
-    if (method === "GET") {
+    if (method === "GET" || method === "HEAD") {
       const item = await cacheManager.get(key);
       if (item === null || item === undefined) {
         res.writeHead(404, { "Content-Type": "application/json" });
@@ -134,13 +165,21 @@ async function handleDashboardRoutes(req, res) {
         preview = item.slice(0, 500);
       }
 
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
+      const payload = JSON.stringify({
         key,
         size,
         preview,
         lastAccessed: Date.now()
-      }));
+      });
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload)
+      });
+      if (method === "HEAD") {
+        res.end();
+        return true;
+      }
+      res.end(payload);
       return true;
     }
 
