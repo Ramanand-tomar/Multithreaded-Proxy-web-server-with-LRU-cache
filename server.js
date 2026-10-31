@@ -3,7 +3,13 @@ const http = require("http");
 const handleRequest = require("./proxyHandler");
 const handleDashboardRoutes = require("./routes/dashboard");
 const WorkerManager = require("./workerManager");
-const { PORT, STATUS_PORT } = require("./config");
+const { PORT, STATUS_PORT, CONCURRENCY_MODE } = require("./config");
+
+// If configured for pure multithreading, delegate to threadedServer engine
+if (CONCURRENCY_MODE === "threads") {
+  require("./threadedServer");
+  return;
+}
 
 // Route dispatcher delegating to dashboard router or proxy handler
 async function handleRoutes(req, res) {

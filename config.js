@@ -19,5 +19,6 @@ module.exports = {
   TARGET_PORT: getEnvInt("TARGET_PORT", 80),
   WORKER_COUNT: getEnvInt("WORKER_COUNT", 0), // 0 = os.cpus().length
   ALLOW_PRIVATE_IP: process.env.ALLOW_PRIVATE_IP === "true" || process.env.NODE_ENV === "test",
+  CONCURRENCY_MODE: process.env.CONCURRENCY_MODE || "cluster", // "cluster" (multi-process) or "threads" (worker_threads)
   PUBLIC_DIR: path.join(__dirname, "public"),
 };
