@@ -5,6 +5,19 @@ const { normalizePath } = require("../httpUtils");
 
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 
+const MIME_TYPES = {
+  ".html": "text/html",
+  ".css": "text/css",
+  ".js": "application/javascript",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+  ".webp": "image/webp"
+};
+
 async function handleDashboardRoutes(req, res) {
   const method = req.method;
   const cleanPath = normalizePath(req.url);
@@ -45,34 +58,24 @@ async function handleDashboardRoutes(req, res) {
     return true;
   }
 
-  // Dashboard JS
-  if (cleanPath === "/dashboard.js") {
-    const filePath = path.join(PUBLIC_DIR, "dashboard.js");
-    fs.readFile(filePath, (err, data) => {
-      if (err) {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Dashboard JS not found");
-        return;
+  // Static Assets from /public (screenshots, icons, images, styles, scripts)
+  if (method === "GET") {
+    const safePath = path.normalize(cleanPath).replace(/^(\.\.[\/\\])+/, "");
+    const candidatePath = path.resolve(PUBLIC_DIR, "." + safePath);
+    if (candidatePath.startsWith(PUBLIC_DIR) && fs.existsSync(candidatePath)) {
+      try {
+        const stat = fs.statSync(candidatePath);
+        if (stat.isFile()) {
+          const ext = path.extname(candidatePath).toLowerCase();
+          const contentType = MIME_TYPES[ext] || "application/octet-stream";
+          res.writeHead(200, { "Content-Type": contentType });
+          fs.createReadStream(candidatePath).pipe(res);
+          return true;
+        }
+      } catch {
+        // Fall through on any filesystem race
       }
-      res.writeHead(200, { "Content-Type": "application/javascript" });
-      res.end(data);
-    });
-    return true;
-  }
-
-  // Dashboard CSS
-  if (cleanPath === "/dashboard.css") {
-    const filePath = path.join(PUBLIC_DIR, "dashboard.css");
-    fs.readFile(filePath, (err, data) => {
-      if (err) {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Dashboard CSS not found");
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "text/css" });
-      res.end(data);
-    });
-    return true;
+    }
   }
 
   // API: Get Cache Status
