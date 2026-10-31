@@ -3,9 +3,9 @@
 [![Live on Render](https://img.shields.io/badge/Render-Live%20Production-success.svg?logo=render&logoColor=white)](https://multithreaded-lru-proxy.onrender.com)
 [![Node.js CI](https://img.shields.io/badge/Node.js-v22+-green.svg?logo=node.js&logoColor=white)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests: 30 Passed](https://img.shields.io/badge/Tests-30%20Passed-success.svg)](test/)
+[![Tests: 37 Passed](https://img.shields.io/badge/Tests-37%20Passed-success.svg)](test/)
 
-A high-concurrency, security-hardened, production-grade HTTP/HTTPS reverse and forward proxy server built with Node.js. Powered by multi-process clustering, an authoritative IPC-coordinated LRU cache, single-flight stampede protection, dual-bounded memory management, SSRF defense, streaming with backpressure control, and a real-time developer monitoring console.
+A high-concurrency, security-hardened, production-grade HTTP/HTTPS reverse and forward proxy server built with Node.js. Powered by dual concurrency engines (multi-process clustering and true zero-copy multithreading via `SharedArrayBuffer` & `Atomics`), single-flight stampede protection, dual-bounded memory management, SSRF defense, streaming with backpressure control, and a real-time developer monitoring console.
 
 ---
 
@@ -39,9 +39,27 @@ Automatic detection and blocking of internal loopbacks, private RFC 1918 subnets
 
 ---
 
-## 🚀 Key Architectural Features
+## 🧵 Dual Concurrency Engines (Clustering & True Multithreading)
 
-- **Authoritative Central Master Cache over IPC:** Eliminates worker cache split-brain. The cluster master process acts as the single source of truth for cache storage and eviction, responding to asynchronous IPC requests from worker processes.
+This project supports two enterprise concurrency architectures:
+
+### Engine 1: Multi-Process Cluster (`npm start`)
+- Uses Node.js `node:cluster` to run isolated worker processes across CPU cores.
+- Features an authoritative master cache coordinated via non-blocking IPC pipes.
+- Maximum fault tolerance: if a worker crashes, other workers continue handling traffic without interruption.
+
+### Engine 2: True Multithreaded Shared-Memory Engine (`npm run start:threads`)
+- Uses Node.js `node:worker_threads` and **`SharedArrayBuffer` with `Atomics`** (Approach 2).
+- **Zero-Copy Shared Cache:** All OS threads share the exact same physical heap memory pool without IPC serialization or socket overhead.
+- **Atomic Mutex Synchronization:** Critical sections are synchronized via `Atomics.compareExchange`, `Atomics.wait`, and `Atomics.notify`.
+- **CPU Offloading Thread Pool:** Offloads Brotli/Gzip compression, payload parsing, and cryptographic hashing across worker threads without blocking the event loop.
+
+---
+
+## 🚀 Key Architectural Highlights
+
+- **Zero-Copy SharedMemoryLRU (`sharedMemoryLRU.js`):** Binary data arena with descriptor tables and FNV-1a 32-bit hash indexing for sub-microsecond cache lookups in shared RAM.
+- **Authoritative Central Master Cache over IPC:** Eliminates worker cache split-brain in clustered mode.
 - **Dual-Bounded Memory & Count Eviction:** Bounded by both maximum entry count (`CACHE_LIMIT`) and total byte consumption (`MAX_CACHE_BYTES`). Large payloads exceeding `MAX_ITEM_BYTES` (5 MiB) automatically bypass caching to prevent cache exhaustion.
 - **Single-Flight Request Coalescing:** Eliminates cache stampedes (thundering herd). Concurrent requests for identical uncached URLs coalesce onto a single upstream network call.
 - **SSRF Defense Shield:** DNS pre-resolution and validation blocks private IP ranges (RFC 1918, RFC 3927 link-local, RFC 4193 IPv6 ULA, cloud metadata `169.254.169.254`, and loopback).
@@ -57,7 +75,7 @@ Automatic detection and blocking of internal loopbacks, private RFC 1918 subnets
 1. **High-Performance API Acceleration & Cost Reduction:**
    Point client applications or frontend microservices through this proxy (`/https://api.example.com/data`). Repetitive downstream queries are served directly from the authoritative in-memory LRU cache ($O(1)$ lookups) with sub-millisecond latencies, significantly reducing upstream API billing costs and avoiding provider rate limits.
 2. **Microservice Egress & Load Distribution:**
-   Serves as an intelligent reverse/forward proxy gateway distributing traffic evenly across CPU cores via Node.js cluster processes without cache divergence.
+   Serves as an intelligent reverse/forward proxy gateway distributing traffic evenly across CPU cores via Node.js cluster processes or worker threads without cache divergence.
 3. **Thundering Herd / Stampede Elimination:**
    When high traffic hits an uncached or freshly expired endpoint, the built-in single-flight engine guarantees only a single request touches the upstream origin.
 4. **Hardened Egress Gateway (SSRF Shield):**
@@ -67,29 +85,32 @@ Automatic detection and blocking of internal loopbacks, private RFC 1918 subnets
 
 ---
 
-## 📐 System Architecture & Flowchart
+## 📐 System Architecture & Flowcharts
 
+### 1. Functional System Flowchart
 ![Flowchart of Multi-threaded Proxy Server](public/Gemini_Generated_Image_p0ae7pp0ae7pp0ae.png)
 
+### 2. Shared-Memory Multithreading Architecture (Approach 2)
 ```
-                                  +-------------------------------------------------------------+
-                                  |                 Master Process (Supervisor)                 |
-                                  |  - Process Supervisor & Crash Resiliency Loop               |
-                                  |  - Authoritative Dual-Bounded LRU Cache (Memory-Aware)     |
-                                  |  - IPC Cache Protocol Dispatcher (GET/PUT/DEL/STATS)        |
-                                  |  - Worker Status Registry (/api/workers-status)             |
-                                  +-------------------------------------------------------------+
-                                                 /              |              \
-                                     IPC Channel/               |               \IPC Channel
-                                               v                v                v
-                       +-------------------------------+ +-------------------------------+
-                       |        Worker Process 1       | |        Worker Process N       |
-                       | - Primary Port (Load balanced)| | - Primary Port (Load balanced)|
-                       | - Single-Flight Stampede Guard| | - Single-Flight Stampede Guard|
-                       | - SSRF & Destination Validator| | - SSRF & Destination Validator|
-                       | - Bounded Stream Forwarder    | | - Bounded Stream Forwarder    |
-                       | - Dashboard & REST Router     | | - Dashboard & REST Router     |
-                       +-------------------------------+ +-------------------------------+
++-----------------------------------------------------------------------------------+
+|                           Single Process Address Space                            |
+|                                                                                   |
+|   +-----------------------+     +-----------------------+                         |
+|   |    Worker Thread 1    | ... |    Worker Thread N    |                         |
+|   |  - HTTP Request Flow  |     |  - HTTP Request Flow  |                         |
+|   |  - CPU Brotli/Crypto  |     |  - CPU Brotli/Crypto  |                         |
+|   +-----------------------+     +-----------------------+                         |
+|               \                             /                                     |
+|                \                           /                                      |
+|    Atomics.wait \                         / Atomics.notify                        |
+|                  v                       v                                        |
+|   +---------------------------------------------------------------------------+   |
+|   |                    SharedArrayBuffer (Binary Heap RAM)                    |   |
+|   |  - Header: Mutex Lock, Capacity, Size, LRU Head, LRU Tail, Stats Metrics   |   |
+|   |  - Descriptors: 64-byte Slot Descriptors with FNV-1a Hash Indexing        |   |
+|   |  - Arena: Zero-Copy Binary Storage for Keys, Headers, and Response Bodies|   |
+|   +---------------------------------------------------------------------------+   |
++-----------------------------------------------------------------------------------+
 ```
 
 For complete technical diagrams and data flow specifications, see [ARCHITECTURE.md](ARCHITECTURE.md).  
@@ -110,7 +131,7 @@ All parameters support environment variable overrides:
 | `MAX_CACHE_BYTES` | `104857600` | Maximum cumulative cache memory budget (100 MiB) |
 | `MAX_ITEM_BYTES` | `5242880` | Maximum individual cache item size (5 MiB) |
 | `UPSTREAM_TIMEOUT_MS` | `15000` | Upstream connection timeout (15 seconds) |
-| `WORKER_COUNT` | `0` | Number of worker processes (0 = all CPU cores) |
+| `WORKER_COUNT` | `0` | Number of workers/threads (0 = all CPU cores) |
 | `ALLOW_PRIVATE_IP` | `false` | When true, permits connections to loopback/private IPs (used in tests) |
 
 ---
@@ -131,9 +152,13 @@ npm test
 ```
 
 ### 3. Start the Server Locally
+
 ```bash
-# Production mode
+# Engine 1: Clustered Multi-Process Mode (Production Default)
 npm start
+
+# Engine 2: True Multithreaded Shared-Memory Engine (Approach 2)
+npm run start:threads
 
 # Development mode (with auto-reload)
 npm run dev
@@ -177,10 +202,13 @@ TAP version 13
 ✔ HTTP Utilities & Standards Compliance (3 tests)
 ✔ LRU Cache Implementation (6 tests)
 ✔ LRU Cache Byte-Aware Eviction & Limits (2 tests)
+✔ Multithreaded Concurrent Execution with worker_threads & SharedArrayBuffer (1 test)
 ✔ Security Hardening & SSRF Protection (10 tests)
+✔ Shared-Memory LRU Cache with SharedArrayBuffer & Atomics (5 tests)
 ✔ SingleFlight Request Coalescing (2 tests)
+✔ ThreadPool with SharedMemoryLRU and Offloaded Worker Tasks (1 test)
 
-30 tests passed, 0 failures.
+37 tests passed, 0 failures.
 ```
 
 ---

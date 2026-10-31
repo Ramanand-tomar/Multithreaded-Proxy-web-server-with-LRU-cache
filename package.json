@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
+    "start:threads": "node threadedServer.js",
     "dev": "nodemon server.js",
     "test": "node --test test/**/*.test.js"
   },
